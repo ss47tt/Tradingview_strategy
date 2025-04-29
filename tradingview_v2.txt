@@ -1,0 +1,103 @@
+//@version=6
+strategy('BuySell Strategy 5min', overlay = true, initial_capital = 100000, commission_type = strategy.commission.percent, commission_value = 0.1)
+
+// === INPUT PARAMETERS ===
+ema_period = input.int(30, title = 'EMA Period')
+rsi_period = input.int(14, title = 'RSI Period')
+rsi_threshold = input.float(10.0, title = 'RSI Threshold (%)')
+take_profit_pct = input.float(20.0, title = 'Take Profit (%)')
+stop_loss_pct = input.float(7.0, title = 'Stop Loss (%)')
+
+// === INDICATORS ===
+ema = ta.ema(close, ema_period)
+rsi = ta.rsi(close, rsi_period)
+
+// === YESTERDAY'S DATA TRACKING ===
+var float yesterday_high = na
+var float yesterday_low = na
+var float last_buy_price = na
+
+// Initialize today's high and low
+var float today_high = na
+var float today_low = na
+
+if na(today_high)
+    today_high := high
+if na(today_low)
+    today_low := low
+
+// Detect new day based on timestamp change (SAFER)
+is_new_day = ta.change(time('D')) != 0
+
+if is_new_day
+    yesterday_high := today_high
+    yesterday_low := today_low
+    today_high := high
+    today_low := low
+else
+    today_high := math.max(today_high, high)
+    today_low := math.min(today_low, low)
+
+// Calculate Midpoint
+midpoint = (yesterday_high + yesterday_low) / 2
+
+// RSI change (from previous bar)
+rsi_change = rsi - rsi[1]
+
+// === CONDITIONS ===
+var bool in_position = false
+
+// === Reusable Boolean Conditions ===
+// Calculate range % safely
+range_pct = (yesterday_high - yesterday_low) / math.max(yesterday_low, 0.0001) * 100
+price_below_ema = close <= ema
+price_above_ema = close >= ema
+price_below_midpoint = close <= midpoint
+price_above_midpoint = close >= midpoint
+price_cheaper_than_last = close < last_buy_price
+price_higher_than_last_buy = close > last_buy_price
+first_time_buying = na(last_buy_price)
+volatility_is_high_enough = range_pct >= 5
+rsi_is_strengthening = rsi_change >= rsi_threshold
+
+// === Balanced Strategy Buy Condition (Single Line) ===
+buy_condition = not in_position and price_below_ema and (price_below_midpoint or price_cheaper_than_last or first_time_buying) and volatility_is_high_enough and rsi_is_strengthening
+
+// === Balanced Strategy Sell Condition (Single Line) ===
+sell_condition = in_position and price_above_ema and (price_above_midpoint or price_higher_than_last_buy) and volatility_is_high_enough and rsi_is_strengthening
+
+// === TRADING LOGIC ===
+if buy_condition
+    qty = strategy.equity / close // Fixed position size based on total equity
+    strategy.entry('Long', strategy.long, qty = qty)
+    last_buy_price := close
+    in_position := true
+    label.new(bar_index, low, text = 'BUY\n' + str.tostring(close), color = color.green, style = label.style_label_up, textcolor = color.white, size = size.small)
+
+if in_position
+    stop_loss_price = last_buy_price * (1 - stop_loss_pct / 100)
+    take_profit_price = last_buy_price * (1 + take_profit_pct / 100)
+
+    // Stop Loss
+    if close <= stop_loss_price
+        strategy.close('Long', comment = 'Stop Loss')
+        in_position := false
+        last_buy_price := na
+        label.new(bar_index, high, text = 'STOP LOSS\n' + str.tostring(close), color = color.red, style = label.style_label_down, textcolor = color.white, size = size.small)
+
+    // Take Profit
+    else if close >= take_profit_price
+        strategy.close('Long', comment = 'Take Profit')
+        in_position := false
+        last_buy_price := na
+        label.new(bar_index, high, text = 'TAKE PROFIT\n' + str.tostring(close), color = color.blue, style = label.style_label_down, textcolor = color.white, size = size.small)
+
+    // Dynamic Sell
+    else if sell_condition
+        strategy.close('Long', comment = 'Dynamic Sell')
+        in_position := false
+        last_buy_price := na
+        label.new(bar_index, high, text = 'DYNAMIC SELL\n' + str.tostring(close), color = color.orange, style = label.style_label_down, textcolor = color.white, size = size.small)
+
+// === PLOTS ===
+plot(ema, title = 'EMA', color = color.yellow)
